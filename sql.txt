@@ -1,0 +1,160 @@
+--normalizacja wielkosci liter imienia i nazwiska
+CREATE OR REPLACE FUNCTION normalizacja () RETURNS TRIGGER AS $$
+BEGIN
+  IF (NEW.imie <> '') IS TRUE THEN
+     NEW.imie := lower(NEW.imie);
+     NEW.imie := initcap(NEW.imie);
+  ELSE
+      RAISE EXCEPTION 'puste pole';
+  END IF;
+  IF (NEW.nazwisko <> '') IS TRUE THEN
+     NEW.nazwisko := lower(NEW.nazwisko);
+     NEW.nazwisko := initcap(NEW.nazwisko);
+  ELSE
+    RAISE EXCEPTION 'puste pole';
+  END IF;
+    
+  RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+  
+CREATE TRIGGER normalizacja
+  BEFORE INSERT OR UPDATE ON pilot
+  FOR EACH ROW
+  EXECUTE PROCEDURE normalizacja();
+
+CREATE TRIGGER normalizacja
+  BEFORE INSERT OR UPDATE ON osoba
+  FOR EACH ROW
+  EXECUTE PROCEDURE normalizacja();
+
+CREATE TRIGGER normalizacja
+  BEFORE INSERT OR UPDATE ON pasazer
+  FOR EACH ROW
+  EXECUTE PROCEDURE normalizacja();
+
+--------------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION sprawdzenie_lotnisko () RETURNS TRIGGER AS $$
+BEGIN
+  IF (NEW.miejsce <> '') IS TRUE THEN
+     NEW.miejsce := lower(NEW.miejsce);
+     NEW.miejsce := initcap(NEW.miejsce);
+  ELSE
+      RAISE EXCEPTION 'puste pole';
+  END IF;
+
+  IF NEW.obslugiwany_typ <= 0 THEN
+      RAISE EXCEPTION 'typ nie moze byc mniejszy od 1'
+  END IF;
+    
+  RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+
+
+
+CREATE TRIGGER sprawdzenie_lotnisko
+  BEFORE INSERT OR UPDATE ON lotnisko
+  FOR EACH ROW
+  EXECUTE PROCEDURE sprawdzenie_lotnisko();
+
+--------------------------------------------------------------------------------------------
+
+--triggery ilosci obslugi i typu samolotu
+CREATE OR REPLACE FUNCTION sprawdzenie_lot() RETURNS TRIGGER AS $$
+    DECLARE
+        lotnisko1_typ INTEGER;
+        lotnisko2_typ INTEGER;
+        samolot_typ INTEGER;
+        wymagana_obsluga INTEGER;
+        posiadana_obsluga INTEGER;
+        zajete_miejsca INTEGER;
+        liczba_miejsc INTEGER;
+    BEGIN
+        lotnisko1_typ := (SELECT l.obslugiwany_typ FROM lotnisko l WHERE NEW.id_lotnisko_odlot=l.id_lotnisko);
+        lotnisko2_typ := (SELECT l.obslugiwany_typ FROM lotnisko l WHERE NEW.id_lotnisko_przylot=l.id_lotnisko);
+        samolot_typ := (SELECT s.typ FROM samolot s WHERE NEW.id_samolotu=s.id_samolotu);
+        wymagana_obsluga := (SELECT s.wymagana_obsluga FROM samolot s WHERE NEW.id_samolotu=s.id_samolotu);
+        posiadana_obsluga := (SELECT COUNT(*) FROM zaloga z JOIN obsluga o ON z.id_obslugi=o.id_obslugi AND NEW.id_zalogi=z.id_zalogi);
+        zajete_miejsca := (SELECT COUNT(*) FROM pasazer_lot pl WHERE pl.id_lotu = NEW.id_lotu);
+        liczba_miejsc := (SELECT s.liczba_miejsc FROM samolot s WHERE s.id_samolotu = NEW.id_samolotu);
+
+
+        IF (lotnisko1_typ >= samolot_typ) AND 
+          (lotnisko2_typ >= samolot_typ) AND 
+          (posiadana_obsluga >= wymagana_obsluga) AND
+          (zajete_miejsca < liczba_miejsc) THEN
+            RETURN NEW;
+          ELSE
+            RETURN NULL;
+        END IF;
+    END;
+$$ LANGUAGE 'plpgsql';  
+
+CREATE TRIGGER sprawdzenie_lot
+    BEFORE INSERT OR UPDATE ON lot
+    FOR EACH ROW EXECUTE PROCEDURE sprawdzenie_lot();  
+
+--------------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION sprawdzenie_pesel () RETURNS TRIGGER AS $$
+BEGIN
+  IF LENGTH(NEW.PESEL) <> 11 THEN
+    RAISE EXCEPTION 'zły pesel';
+  END IF;
+  IF (SELECT NEW.PESEL ~ '^\d+(.\d+)?$') IS FALSE THEN
+    RAISE EXCEPTION 'zły pesel';
+  END IF;  
+  RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE TRIGGER sprawdzenie_pesel
+    BEFORE INSERT OR UPDATE ON pasazer
+    FOR EACH ROW EXECUTE PROCEDURE sprawdzenie_pesel();  
+
+--------------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION sprawdzenie_samolot () RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.liczba_miejsc < 0 THEN
+      RAISE EXCEPTION 'liczba miejsc nie moze byc mniejsza od 0';
+  END IF;
+
+  IF NEW.wymagana_obsluga < 0 THEN
+      RAISE EXCEPTION 'wymagana obsluga nie moze byc mniejsza od 0';
+  END IF;
+
+  IF NEW.typ < 1 THEN
+      RAISE EXCEPTION 'typ nie moze byc mniejszy od 1';
+  END IF;
+    
+  RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+
+
+CREATE TRIGGER sprawdzenie_samolot
+  BEFORE INSERT OR UPDATE ON samolot
+  FOR EACH ROW
+  EXECUTE PROCEDURE sprawdzenie_samolot();
+
+--------------------------------------------------------------------------------------------
+
+--widoki
+CREATE VIEW lotyPilota AS
+  SELECT l.id_lotu, z.id_pilota_1, z.id_pilota_2, ltn1.miejsce || ' - ' || ltn2.miejsce AS trasa,
+        l.data_odlotu, l.data_przylotu
+  FROM lot l, zaloga z, lotnisko ltn1, lotnisko ltn2 
+  WHERE l.id_zalogi=z.id_zalogi AND ltn1.id_lotnisko=l.id_lotnisko_odlot AND ltn2.id_lotnisko=l.id_lotnisko_przylot;
+
+
+CREATE VIEW lotyPasazera AS
+  SELECT l.id_lotu, pl.pesel, ltn1.miejsce || ' - ' || ltn2.miejsce AS trasa,
+        l.data_odlotu, l.data_przylotu
+  FROM lot l, lotnisko ltn1, lotnisko ltn2, pasazer_lot pl 
+  WHERE ltn1.id_lotnisko=l.id_lotnisko_odlot AND ltn2.id_lotnisko=l.id_lotnisko_przylot AND l.id_lotu=pl.id_lotu;
+
+
+
